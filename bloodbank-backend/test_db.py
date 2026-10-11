@@ -6,8 +6,9 @@ try:
         host="127.0.0.1",
         port=3306,
         user="root",
-        password="Romit@23",
-        database="BloodBankDB"
+        database="bloodbankdb",
+        password="Romit@23"
+        
     )
 
     print("SUCCESS: MySQL connected!")
