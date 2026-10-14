@@ -1,122 +1,149 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import useBloodBankData from "./hooks/useBloodBankData";
+import { pagePath, pathToPage, quickAddType } from "./config/navConfig";
+
+import Sidebar from "./components/navbar/Sidebar";
+import Topbar from "./components/navbar/Topbar";
+import PageHeading from "./components/navbar/PageHeading";
+import Footer from "./components/navbar/Footer";
+import Toast from "./components/common/Toast";
+import RecordFormModal from "./components/forms/RecordFormModal";
+
+import Dashboard from "./pages/Dashboard";
+import Donors from "./pages/Donors";
+import BloodInventory from "./pages/BloodInventory";
+import BloodBanks from "./pages/BloodBanks";
+import Hospitals from "./pages/Hospitals";
+import BloodRequests from "./pages/BloodRequests";
+import Donations from "./pages/Donations";
+import Storage from "./pages/Storage";
+import Reports from "./pages/Reports";
+import AdminSettings from "./pages/AdminSettings";
 
 function App() {
-  const [count, setCount] = useState(0)
+  const location = useLocation();
+  const routerNavigate = useNavigate();
+
+  const page = pathToPage[location.pathname] || "Dashboard";
+
+  const [mobileNav, setMobileNav] = useState(false);
+  const [search, setSearch] = useState("");
+  const [modal, setModal] = useState("");
+  const [form, setForm] = useState({});
+  const [notice, setNotice] = useState("");
+
+  const data = useBloodBankData();
+  const { apiOnline, donors, units, hospitals, requests, banks, totalUnits, pending, saveRecord, refresh } = data;
+
+  const showNotice = (msg) => {
+    setNotice(msg);
+    setTimeout(() => setNotice(""), 3500);
+  };
+
+  const navigate = (label) => {
+    const targetPath = pagePath[label] || "/";
+    routerNavigate(targetPath);
+    setSearch("");
+    setMobileNav(false);
+  };
+
+  const setPage = (label) => {
+    const targetPath = pagePath[label] || "/";
+    routerNavigate(targetPath);
+    setSearch("");
+  };
+
+  const openCreate = (type) => {
+    setForm({});
+    setModal(type);
+  };
+
+  const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  async function handleSave(e) {
+    e.preventDefault();
+    const { ok, message } = await saveRecord(modal, form);
+    if (ok) setModal("");
+    showNotice(message);
+  }
+
+  const renderPage = () => {
+    switch (page) {
+      case "Dashboard":
+        return (
+          <Dashboard
+            donors={donors} units={units} hospitals={hospitals} requests={requests}
+            totalUnits={totalUnits} pending={pending}
+            setPage={setPage} onAdd={openCreate}
+          />
+        );
+      case "Donors":
+        return <Donors donors={donors} search={search} onAdd={openCreate} />;
+      case "Blood inventory":
+        return <BloodInventory units={units} search={search} onAdd={openCreate} />;
+      case "Blood banks":
+        return <BloodBanks banks={banks} search={search} onAdd={openCreate} />;
+      case "Hospitals":
+        return <Hospitals hospitals={hospitals} search={search} onAdd={openCreate} />;
+      case "Blood requests":
+        return <BloodRequests requests={requests} search={search} onAdd={openCreate} />;
+      case "Donations":
+        return <Donations units={units} search={search} onAdd={openCreate} />;
+      case "Storage":
+        return <Storage units={units} search={search} onAdd={openCreate} />;
+      case "Reports":
+        return <Reports setPage={setPage} showNotice={showNotice} />;
+      default:
+        return <AdminSettings apiOnline={apiOnline} />;
+    }
+  };
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="app-shell">
+      <Sidebar
+        page={page}
+        onNavigate={navigate}
+        open={mobileNav}
+        onClose={() => setMobileNav(false)}
+        pending={pending}
+      />
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+      <main className="main">
+        <Topbar
+          page={page}
+          search={search}
+          onSearch={setSearch}
+          onMenu={() => setMobileNav(true)}
+          onBell={() => showNotice(`${pending} hospital request(s) pending.`)}
+        />
+        <div className="content">
+          <PageHeading
+            page={page}
+            apiOnline={apiOnline}
+            onRefresh={() => {
+              refresh();
+              showNotice("Dashboard refreshed from MySQL database.");
+            }}
+            onQuickAdd={() => openCreate(quickAddType[page] || "Blood unit")}
+          />
+          {renderPage()}
+          <Footer />
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+      </main>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+      {modal && (
+        <RecordFormModal
+          type={modal}
+          form={form}
+          setField={setField}
+          onSubmit={handleSave}
+          onClose={() => setModal("")}
+        />
+      )}
+      <Toast message={notice} onClose={() => setNotice("")} />
+    </div>
+  );
 }
 
-export default App
+export default App;
