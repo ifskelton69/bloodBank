@@ -1,15 +1,15 @@
-import { Activity, Plus } from "lucide-react";
+import { Activity, Plus, RefreshCw } from "lucide-react";
 import Button from "../common/Button";
 import { pageTitles } from "../../config/navConfig";
 
-export default function PageHeading({ page, apiOnline, onRefresh, onQuickAdd }) {
+export default function PageHeading({ page, apiOnline, loading, onRefresh, onQuickAdd }) {
   return (
     <div className="page-heading">
       <div>
-        <div className="eyebrow">
-          <span className="live-dot" />
-          {apiOnline ? "LIVE DATABASE CONNECTION" : "DEMO DATA · CONNECT API TO SYNC"}
-        </div>
+        {/* <div className="eyebrow">
+          <span className={apiOnline ? "live-dot" : "live-dot bg-amber-500"} />
+          {apiOnline ? "LIVE DATABASE CONNECTION" : "API CONNECTION OFFLINE"}
+        </div> */}
         <h1>{pageTitles[page] || page}</h1>
         <p>
           {page === "Dashboard"
@@ -18,8 +18,17 @@ export default function PageHeading({ page, apiOnline, onRefresh, onQuickAdd }) 
         </p>
       </div>
       <div className="heading-actions">
-        <Button variant="secondary" icon={Activity} onClick={onRefresh}>Refresh</Button>
-        <Button icon={Plus} onClick={onQuickAdd}>Quick add</Button>
+        <Button
+          variant="secondary"
+          icon={loading ? RefreshCw : Activity}
+          onClick={onRefresh}
+          disabled={loading}
+        >
+          {loading ? "Syncing..." : "Refresh"}
+        </Button>
+        <Button icon={Plus} onClick={onQuickAdd}>
+          Quick add
+        </Button>
       </div>
     </div>
   );

@@ -1,82 +1,133 @@
 import axios from "./axios";
 
-// GET: Fetch all donors
+// -----------------------------------------
+// AUTHENTICATION
+// -----------------------------------------
+export const loginAdmin = (credentials) => {
+  return axios.post("/auth/login", credentials);
+};
+
+export const getCurrentAdmin = () => {
+  return axios.get("/auth/me");
+};
+
+export const logoutAdmin = () => {
+  return axios.post("/auth/logout");
+};
+
+// -----------------------------------------
+// DONORS
+// -----------------------------------------
 export const getDonors = () => {
   return axios.get("/donors");
 };
 
-// POST: Register a new donor
 export const addDonor = (data) => {
   return axios.post("/newdonor", data);
 };
 
-// GET: Fetch blood inventory
+// -----------------------------------------
+// BLOOD UNITS / INVENTORY
+// -----------------------------------------
 export const getBloodUnits = () => {
   return axios.get("/blood-units");
 };
 
-// POST: Add new blood unit
 export const addBloodUnit = (data) => {
   return axios.post("/newunit", data);
 };
 export const addUnit = addBloodUnit;
 
-// GET: Fetch all hospitals
+export const updateBloodUnit = (unitId, data) => {
+  return axios.put(`/blood-units/${unitId}`, data);
+};
+
+export const updateUnitTestingStatus = (unitId, testingStatus) => {
+  return axios.patch(`/blood-units/${unitId}/status`, {
+    Testing_Status: testingStatus,
+  });
+};
+
+export const deleteBloodUnit = (unitId) => {
+  return axios.delete(`/blood-units/${unitId}`);
+};
+
+// -----------------------------------------
+// HOSPITALS
+// -----------------------------------------
 export const getHospitals = () => {
   return axios.get("/hospitals");
 };
 
-// POST: Add new hospital
 export const addHospital = (data) => {
   return axios.post("/newhospital", data);
 };
 
-// GET: Fetch all blood banks
+export const deleteHospital = (hospitalId) => {
+  return axios.delete(`/hospitals/${hospitalId}`);
+};
+
+// -----------------------------------------
+// BLOOD BANKS
+// -----------------------------------------
 export const getBloodBanks = () => {
   return axios.get("/blood-banks");
 };
 export const getBanks = getBloodBanks;
 
-// POST: Add new blood bank
 export const addBloodBank = (data) => {
   return axios.post("/newbank", data);
 };
 export const addBank = addBloodBank;
 
-// GET: Fetch all blood requests
+// -----------------------------------------
+// BLOOD REQUESTS
+// -----------------------------------------
 export const getRequests = () => {
   return axios.get("/requests");
 };
 
-// POST: Create a new blood request
 export const addRequest = (data) => {
   return axios.post("/newrequest", data);
 };
 
-// GET: Blood stock report (grouped by blood type, verified passed and unexpired)
+export const updateRequestStatus = (requestId, status) => {
+  return axios.put(`/requests/${requestId}/status`, { status });
+};
+
+// -----------------------------------------
+// REPORTS
+// -----------------------------------------
 export const getBloodStockReport = () => {
   return axios.get("/reports/blood-stock");
 };
 
-// GET: Donor eligibility report
 export const getDonorEligibilityReport = () => {
   return axios.get("/reports/donor-eligibility");
 };
 
 export default {
+  loginAdmin,
+  getCurrentAdmin,
+  logoutAdmin,
   getDonors,
   addDonor,
   getBloodUnits,
   addBloodUnit,
   addUnit,
+  updateBloodUnit,
+  updateUnitTestingStatus,
+  deleteBloodUnit,
   getHospitals,
   addHospital,
+  deleteHospital,
   getBloodBanks,
   getBanks,
   addBloodBank,
   addBank,
   getRequests,
   addRequest,
+  updateRequestStatus,
   getBloodStockReport,
   getDonorEligibilityReport,
 };

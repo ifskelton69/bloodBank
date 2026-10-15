@@ -1,5 +1,5 @@
 import {
-  Building2, ClipboardList, Droplet, Droplets, FileBarChart,
+  ClipboardList, Droplets, FileBarChart,
   Hospital, LayoutDashboard, Settings, Users, Warehouse,
 } from "lucide-react";
 
@@ -9,18 +9,16 @@ export const nav = [
     label: "Workspace",
     items: [
       ["Dashboard", LayoutDashboard, "/"],
-      ["Donors", Users, "/donors"],
-      ["Blood inventory", Droplets, "/inventory"],
-      ["Blood banks", Warehouse, "/blood-banks"],
-      ["Hospitals", Hospital, "/hospitals"],
       ["Blood requests", ClipboardList, "/requests"],
+      ["Blood inventory", Droplets, "/inventory"],
+      ["Hospitals", Hospital, "/hospitals"],
+      ["Donors", Users, "/donors"],
+      ["Blood banks", Warehouse, "/blood-banks"],
     ],
   },
   {
     label: "Management",
     items: [
-      ["Donations", Droplet, "/donations"],
-      ["Storage", Building2, "/storage"],
       ["Reports", FileBarChart, "/reports"],
       ["Admin settings", Settings, "/settings"],
     ],
@@ -33,25 +31,27 @@ export const pathToPage = {
   ...Object.fromEntries(allItems.map(([label, , path]) => [path, label])),
   "/dashboard": "Dashboard",
   "/index.html": "Dashboard",
+  "/requests": "Blood requests",
+  "/inventory": "Blood inventory",
+  "/hospitals": "Hospitals",
 };
 
 export const pageTitles = {
   Dashboard: "Overview",
-  Donors: "Donor directory",
-  "Blood inventory": "Inventory management",
-  "Blood banks": "Blood bank network",
-  Hospitals: "Hospital directory",
   "Blood requests": "Request management",
-  Donations: "Donation activity",
-  Storage: "Storage overview",
+  "Blood inventory": "Inventory management",
+  Hospitals: "Hospital management",
+  Donors: "Donor directory",
+  "Blood banks": "Blood bank network",
   Reports: "Analytics & reports",
   "Admin settings": "Workspace settings",
 };
 
 // Which modal the "Quick add" button opens on each page
 export const quickAddType = {
-  Donors: "Donor",
-  Hospitals: "Hospital",
-  "Blood banks": "Blood bank",
   "Blood requests": "Blood request",
+  "Blood inventory": "Blood unit",
+  Hospitals: "Hospital",
+  Donors: "Donor",
+  "Blood banks": "Blood bank",
 };

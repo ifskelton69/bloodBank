@@ -1,7 +1,25 @@
 import { ChevronDown, CircleHelp, Droplet, HeartPulse, LogOut, X } from "lucide-react";
 import { nav } from "../../config/navConfig";
+import { useAuth } from "../../context/useAuth";
 
 export default function Sidebar({ page, onNavigate, open, onClose, pending }) {
+  const { admin, logout } = useAuth();
+
+  const adminName = admin?.name || "Administrator";
+  const adminEmail = admin?.email || "admin@vitaldrop.org";
+  const initials = adminName
+    .split(" ")
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "AD";
+
+  const handleLogout = async () => {
+    if (window.confirm("Are you sure you want to log out of your administrator session?")) {
+      await logout();
+    }
+  };
+
   return (
     <>
       <aside className={`sidebar ${open ? "open" : ""}`}>
@@ -13,7 +31,7 @@ export default function Sidebar({ page, onNavigate, open, onClose, pending }) {
             <b>VitalDrop</b>
             <span>BLOOD BANK NETWORK</span>
           </div>
-          <button className="mobile-close icon-btn" onClick={onClose}>
+          <button className="mobile-close icon-btn" onClick={onClose} aria-label="Close sidebar">
             <X size={18} />
           </button>
         </div>
@@ -47,23 +65,27 @@ export default function Sidebar({ page, onNavigate, open, onClose, pending }) {
         ))}
 
         <div className="sidebar-bottom">
-          <div className="help-card">
+          {/* <div className="help-card">
             <div className="help-icon">
               <CircleHelp size={17} />
             </div>
             <div>
-              <b>Need a hand?</b>
-              <span>Check project help</span>
+              <b>VitalDrop Core</b>
+              <span>MySQL Live Connected</span>
             </div>
-            <ChevronDown size={14} />
-          </div>
+          </div> */}
           <div className="profile">
-            <div className="avatar">AD</div>
-            <div className="profile-text">
-              <b>Admin User</b>
-              <span>Network administrator</span>
+            <div className="avatar">{initials}</div>
+            <div className="profile-text" title={adminEmail}>
+              <b>{adminName}</b>
+              <span>{adminEmail}</span>
             </div>
-            <button className="icon-btn" title="Account">
+            <button
+              className="icon-btn"
+              title="Log out"
+              onClick={handleLogout}
+              aria-label="Log out"
+            >
               <LogOut size={17} />
             </button>
           </div>

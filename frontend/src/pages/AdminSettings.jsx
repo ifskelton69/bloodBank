@@ -35,16 +35,16 @@ export default function AdminSettings({ apiOnline }) {
           <b>Project features</b>
           <span>Donors, inventory, hospitals, requests, cursors and triggers</span>
         </div>
-        <Status value="Configured in UI" />
+        <Status className="gap" value="Configured in UI" />
       </div>
 
-      <div className="settings-note">
+      {/* <div className="settings-note">
         <AlertTriangle size={18} />
         <p>
           Demo records are shown if the Flask API is unavailable. Connect the endpoints and restart the
           frontend to read and write live data.
         </p>
-      </div>
+      </div> */}
     </div>
   );
 }

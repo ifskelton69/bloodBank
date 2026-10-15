@@ -5,19 +5,17 @@ import {
   addDonor,
   addHospital,
   addRequest,
+  deleteBloodUnit,
+  deleteHospital,
   getBloodBanks,
   getBloodUnits,
   getDonors,
   getHospitals,
   getRequests,
+  updateBloodUnit,
+  updateRequestStatus,
+  updateUnitTestingStatus,
 } from "../services/api";
-import {
-  initialBanks,
-  initialDonors,
-  initialHospitals,
-  initialRequests,
-  initialUnits,
-} from "../data/initialData";
 
 const apiSavers = {
   Donor: addDonor,
@@ -32,17 +30,17 @@ function buildRecord(type, form) {
   switch (type) {
     case "Donor":
       return {
-        Name: form.Name,
-        Blood_Type: form.Blood_Type,
-        Contact_No: form.Contact_No,
-        Address: form.Address || "Pune, Maharashtra",
+        Name: form.Name?.trim(),
+        Blood_Type: form.Blood_Type?.trim()?.toUpperCase(),
+        Contact_No: form.Contact_No?.trim(),
+        Address: form.Address?.trim() || "Not Provided",
         DOB: form.DOB || "2000-01-01",
         Gender: form.Gender || "Other",
         Eligibility_Status: form.Eligibility_Status || "Eligible",
       };
     case "Blood unit":
       return {
-        Blood_Type: form.Blood_Type,
+        Blood_Type: form.Blood_Type?.trim()?.toUpperCase(),
         Quantity: Number(form.Quantity || 450),
         Collection_Date: form.Collection_Date || today,
         Expiration_Date: form.Expiration_Date || today,
@@ -51,20 +49,20 @@ function buildRecord(type, form) {
       };
     case "Hospital":
       return {
-        Name: form.Name,
-        Address: form.Address || "Pune, Maharashtra",
-        Contact_No: form.Contact_No || "",
+        Name: form.Name?.trim(),
+        Address: form.Address?.trim() || "Pune, Maharashtra",
+        Contact_No: form.Contact_No?.trim() || "",
       };
     case "Blood bank":
       return {
-        Name: form.Name,
-        Address: form.Address || "Pune, Maharashtra",
-        Contact_No: form.Contact_No || "",
+        Name: form.Name?.trim(),
+        Address: form.Address?.trim() || "Pune, Maharashtra",
+        Contact_No: form.Contact_No?.trim() || "",
         Staff_Count: Number(form.Staff_Count || 0),
       };
     case "Blood request":
       return {
-        Needed_Blood_Type: form.Needed_Blood_Type,
+        Needed_Blood_Type: form.Needed_Blood_Type?.trim()?.toUpperCase(),
         Qty_Requested: Number(form.Qty_Requested || 1),
         Urgency_Level: form.Urgency_Level || "Normal",
         Hospital_ID: Number(form.Hospital_ID || 1),
@@ -76,17 +74,19 @@ function buildRecord(type, form) {
 
 export default function useBloodBankData() {
   const [apiOnline, setApiOnline] = useState(false);
-  const [donors, setDonors] = useState(initialDonors);
-  const [units, setUnits] = useState(initialUnits);
-  const [hospitals, setHospitals] = useState(initialHospitals);
-  const [requests, setRequests] = useState(initialRequests);
-  const [banks, setBanks] = useState(initialBanks);
-  const [loading, setLoading] = useState(false);
+  const [apiError, setApiError] = useState("");
+  const [donors, setDonors] = useState([]);
+  const [units, setUnits] = useState([]);
+  const [hospitals, setHospitals] = useState([]);
+  const [requests, setRequests] = useState([]);
+  const [banks, setBanks] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
+    setApiError("");
     try {
-      const results = await Promise.allSettled([
+      const results = await Promise.all([
         getDonors(),
         getBloodUnits(),
         getHospitals(),
@@ -94,19 +94,20 @@ export default function useBloodBankData() {
         getBloodBanks(),
       ]);
 
-      const setters = [setDonors, setUnits, setHospitals, setRequests, setBanks];
-      let anyOk = false;
+      setDonors(Array.isArray(results[0]?.data) ? results[0].data : []);
+      setUnits(Array.isArray(results[1]?.data) ? results[1].data : []);
+      setHospitals(Array.isArray(results[2]?.data) ? results[2].data : []);
+      setRequests(Array.isArray(results[3]?.data) ? results[3].data : []);
+      setBanks(Array.isArray(results[4]?.data) ? results[4].data : []);
 
-      results.forEach((res, i) => {
-        if (res.status === "fulfilled" && Array.isArray(res.value?.data)) {
-          setters[i](res.value.data);
-          anyOk = true;
-        }
-      });
-
-      setApiOnline(anyOk);
-    } catch {
+      setApiOnline(true);
+    } catch (err) {
+      console.error("Failed to load data from MySQL:", err);
       setApiOnline(false);
+      setApiError(
+        err.response?.data?.error ||
+        "Could not connect to the VitalDrop backend. Please verify that the Flask server is running on http://localhost:5000."
+      );
     } finally {
       setLoading(false);
     }
@@ -115,9 +116,9 @@ export default function useBloodBankData() {
   useEffect(() => {
     let ignore = false;
 
-    async function init() {
+    async function initData() {
       try {
-        const results = await Promise.allSettled([
+        const results = await Promise.all([
           getDonors(),
           getBloodUnits(),
           getHospitals(),
@@ -125,26 +126,31 @@ export default function useBloodBankData() {
           getBloodBanks(),
         ]);
 
-        if (ignore) return;
-        const setters = [setDonors, setUnits, setHospitals, setRequests, setBanks];
-        let anyOk = false;
-
-        results.forEach((res, i) => {
-          if (res.status === "fulfilled" && Array.isArray(res.value?.data)) {
-            setters[i](res.value.data);
-            anyOk = true;
-          }
-        });
-
-        setApiOnline(anyOk);
-      } catch {
-        if (!ignore) setApiOnline(false);
+        if (!ignore) {
+          setDonors(Array.isArray(results[0]?.data) ? results[0].data : []);
+          setUnits(Array.isArray(results[1]?.data) ? results[1].data : []);
+          setHospitals(Array.isArray(results[2]?.data) ? results[2].data : []);
+          setRequests(Array.isArray(results[3]?.data) ? results[3].data : []);
+          setBanks(Array.isArray(results[4]?.data) ? results[4].data : []);
+          setApiOnline(true);
+        }
+      } catch (err) {
+        if (!ignore) {
+          console.error("Failed to load data from MySQL:", err);
+          setApiOnline(false);
+          setApiError(
+            err.response?.data?.error ||
+            "Could not connect to the VitalDrop backend. Please verify that the Flask server is running on http://localhost:5000."
+          );
+        }
       } finally {
-        if (!ignore) setLoading(false);
+        if (!ignore) {
+          setLoading(false);
+        }
       }
     }
 
-    init();
+    initData();
 
     return () => {
       ignore = true;
@@ -156,35 +162,96 @@ export default function useBloodBankData() {
     (r) => String(r.Status).toLowerCase() === "pending"
   ).length;
 
-  const setters = {
-    Donor: setDonors,
-    "Blood unit": setUnits,
-    Hospital: setHospitals,
-    "Blood request": setRequests,
-    "Blood bank": setBanks,
+  // Change request status (Pending, Approved, Rejected)
+  const changeRequestStatus = async (requestId, status) => {
+    try {
+      const res = await updateRequestStatus(requestId, status);
+      // Refresh requests and units (approval deducts stock)
+      await loadAll();
+      return {
+        ok: true,
+        message: res.data?.message || `Request #${requestId} status set to ${status}.`,
+      };
+    } catch (err) {
+      const msg = err.response?.data?.error || "Failed to update request status.";
+      return { ok: false, message: msg };
+    }
   };
 
-  async function saveRecord(type, form) {
+  // Edit blood unit
+  const saveUnit = async (unitId, unitData) => {
+    try {
+      const res = await updateBloodUnit(unitId, unitData);
+      await loadAll();
+      return {
+        ok: true,
+        message: res.data?.message || `Blood unit #${unitId} updated successfully.`,
+      };
+    } catch (err) {
+      const msg = err.response?.data?.error || "Failed to update blood unit.";
+      return { ok: false, message: msg };
+    }
+  };
+
+  // Change blood unit testing status
+  const changeTestingStatus = async (unitId, status) => {
+    try {
+      const res = await updateUnitTestingStatus(unitId, status);
+      await loadAll();
+      return {
+        ok: true,
+        message: res.data?.message || `Testing status updated to ${status}.`,
+      };
+    } catch (err) {
+      const msg = err.response?.data?.error || "Failed to update testing status.";
+      return { ok: false, message: msg };
+    }
+  };
+
+  // Delete blood unit
+  const removeBloodUnit = async (unitId) => {
+    try {
+      const res = await deleteBloodUnit(unitId);
+      await loadAll();
+      return {
+        ok: true,
+        message: res.data?.message || `Blood unit #${unitId} deleted successfully.`,
+      };
+    } catch (err) {
+      const msg = err.response?.data?.error || "Failed to delete blood unit.";
+      return { ok: false, message: msg };
+    }
+  };
+
+  // Delete hospital
+  const removeHospital = async (hospitalId) => {
+    try {
+      const res = await deleteHospital(hospitalId);
+      await loadAll();
+      return {
+        ok: true,
+        message: res.data?.message || `Hospital #${hospitalId} deleted successfully.`,
+      };
+    } catch (err) {
+      const msg = err.response?.data?.error || "Failed to delete hospital.";
+      return { ok: false, message: msg };
+    }
+  };
+
+  // Save new record
+  const saveRecord = async (type, form) => {
     const record = buildRecord(type, form);
     const saver = apiSavers[type];
 
-    try {
-      if (apiOnline && saver) {
-        const response = await saver(record);
-        await loadAll();
-        const msg = response?.data?.message || `${type} saved successfully to database.`;
-        return { ok: true, message: msg };
-      }
+    if (!saver) {
+      return { ok: false, message: `Unknown record type: ${type}` };
+    }
 
-      // Offline fallback
-      setters[type]?.((list) => [
-        { ...record, [`${type.replace(" ", "_")}_ID`]: Date.now() },
-        ...list,
-      ]);
-      return {
-        ok: true,
-        message: `${type} saved locally. Connect API to sync with MySQL.`,
-      };
+    try {
+      const response = await saver(record);
+      await loadAll();
+      const msg = response?.data?.message || `${type} created successfully in database.`;
+      return { ok: true, message: msg };
     } catch (err) {
       const data = err.response?.data;
       const detail = data?.fields ? `: ${data.fields.join(", ")}` : "";
@@ -192,13 +259,14 @@ export default function useBloodBankData() {
         ok: false,
         message: data?.error
           ? `${data.error}${detail}`
-          : "Could not save to API. Please check your network or server.",
+          : "Could not save record to database. Please check connection.",
       };
     }
-  }
+  };
 
   return {
     apiOnline,
+    apiError,
     loading,
     donors,
     units,
@@ -208,6 +276,11 @@ export default function useBloodBankData() {
     totalUnits,
     pending,
     saveRecord,
+    changeRequestStatus,
+    saveUnit,
+    changeTestingStatus,
+    removeBloodUnit,
+    removeHospital,
     refresh: loadAll,
   };
 }

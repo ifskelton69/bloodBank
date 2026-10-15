@@ -1,13 +1,41 @@
 import datetime
 from decimal import Decimal
+from functools import wraps
+import os
+
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from db import get_db_connection
+from itsdangerous import BadTimeSignature, SignatureExpired, URLSafeTimedSerializer
+from werkzeug.security import check_password_hash
+
+from db import ALLOWED_ADMIN_ACCOUNTS, get_db_connection, init_db
+
+load_dotenv()
 
 app = Flask(__name__)
 
-# Allow React frontend to communicate with Flask
-CORS(app)
+# Load SECRET_KEY and initialize serializer for token auth
+SECRET_KEY = os.getenv("SECRET_KEY", "vitaldrop_jwt_secret_9db3310c8f8536eab3")
+app.config["SECRET_KEY"] = SECRET_KEY
+token_serializer = URLSafeTimedSerializer(SECRET_KEY, salt="vitaldrop-admin-auth")
+
+# In-memory blacklist for revoked tokens on logout
+REVOKED_TOKENS = set()
+
+# Permitted admin emails
+ALLOWED_ADMIN_EMAILS = {acc["email"].strip().lower() for acc in ALLOWED_ADMIN_ACCOUNTS}
+
+# Allow React frontend to communicate with Flask with headers and credentials
+CORS(
+    app,
+    resources={r"/api/*": {"origins": "*"}},
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
+
+# Run schema and seed check on startup
+init_db()
 
 
 def serialize_item(item):
@@ -23,9 +51,126 @@ def serialize_item(item):
     return item
 
 
+def admin_required(f):
+    """Decorator to require valid admin authentication token."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Admin authentication required. Please log in."}), 401
+
+        token = auth_header.split(" ", 1)[1].strip()
+        if not token or token in REVOKED_TOKENS:
+            return jsonify({"error": "Session token has been invalidated. Please log in again."}), 401
+
+        try:
+            payload = token_serializer.loads(token, max_age=86400)  # 24 hours validity
+        except SignatureExpired:
+            return jsonify({"error": "Session has expired. Please log in again."}), 401
+        except (BadTimeSignature, Exception):
+            return jsonify({"error": "Invalid authentication token. Please log in again."}), 401
+
+        admin_email = (payload.get("email") or "").strip().lower()
+        if admin_email not in ALLOWED_ADMIN_EMAILS:
+            return jsonify({"error": "Access denied: Unauthorized administrator account."}), 403
+
+        request.admin = payload
+        return f(*args, **kwargs)
+
+    return decorated
+
+
 @app.route("/")
 def home():
-    return jsonify({"message": "Blood Bank API is running", "status": "online"})
+    return jsonify({"message": "VitalDrop Blood Bank API is running", "status": "online"})
+
+
+# -----------------------------------------
+# AUTHENTICATION
+# -----------------------------------------
+
+@app.route("/api/auth/login", methods=["POST"])
+def admin_login():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body must contain JSON."}), 400
+
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required."}), 400
+
+    # Requirement 1: Only allow the two permitted emails
+    if email not in ALLOWED_ADMIN_EMAILS:
+        return (
+            jsonify({
+                "error": "Access denied. Only authorized administrators may log in."
+            }),
+            403,
+        )
+
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT Admin_ID, Email, Password_Hash, Name FROM ADMIN_USER WHERE Email = %s",
+            (email,),
+        )
+        admin = cursor.fetchone()
+
+        if not admin or not check_password_hash(admin["Password_Hash"], password):
+            return jsonify({"error": "Invalid email or password."}), 401
+
+        token = token_serializer.dumps({
+            "admin_id": admin["Admin_ID"],
+            "email": admin["Email"],
+            "name": admin["Name"],
+        })
+
+        return jsonify({
+            "message": "Login successful.",
+            "token": token,
+            "admin": {
+                "id": admin["Admin_ID"],
+                "email": admin["Email"],
+                "name": admin["Name"],
+            },
+        }), 200
+
+    except Exception as e:
+        app.logger.exception("Login failure")
+        return jsonify({"error": f"Authentication server error: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+
+@app.route("/api/auth/me", methods=["GET"])
+@admin_required
+def get_current_admin():
+    return jsonify({
+        "admin": {
+            "id": request.admin.get("admin_id"),
+            "email": request.admin.get("email"),
+            "name": request.admin.get("name"),
+        }
+    }), 200
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+@admin_required
+def admin_logout():
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+        REVOKED_TOKENS.add(token)
+
+    return jsonify({"message": "Logged out successfully."}), 200
 
 
 # -----------------------------------------
@@ -54,20 +199,16 @@ def get_donors():
 
 @app.route("/api/newdonor", methods=["POST"])
 @app.route("/api/donors", methods=["POST"])
+@admin_required
 def add_donor():
     data = request.get_json()
-
     if not data:
         return jsonify({"error": "Request body must contain JSON"}), 400
 
     required_fields = ["Name", "Blood_Type", "Contact_No"]
     missing_fields = [field for field in required_fields if not data.get(field)]
-
     if missing_fields:
-        return (
-            jsonify({"error": "Missing required fields", "fields": missing_fields}),
-            400,
-        )
+        return jsonify({"error": "Missing required fields", "fields": missing_fields}), 400
 
     name = data.get("Name", "").strip()
     address = data.get("Address", "Not Provided").strip()
@@ -83,11 +224,9 @@ def add_donor():
 
     connection = None
     cursor = None
-
     try:
         connection = get_db_connection()
         cursor = connection.cursor()
-
         cursor.execute(
             """
             INSERT INTO DONOR
@@ -96,26 +235,20 @@ def add_donor():
             """,
             (name, address, blood_type, contact_no, dob, gender, eligibility_status),
         )
-
         donor_id = cursor.lastrowid
         connection.commit()
 
-        return (
-            jsonify({
-                "message": "Donor registered successfully",
-                "Donor_ID": donor_id,
-                "Name": name,
-                "Blood_Type": blood_type,
-            }),
-            201,
-        )
-
+        return jsonify({
+            "message": "Donor registered successfully",
+            "Donor_ID": donor_id,
+            "Name": name,
+            "Blood_Type": blood_type,
+        }), 201
     except Exception as e:
         if connection:
             connection.rollback()
         app.logger.exception("Failed to register donor")
         return jsonify({"error": f"Failed to register donor: {str(e)}"}), 500
-
     finally:
         if cursor:
             cursor.close()
@@ -136,16 +269,18 @@ def get_blood_units():
         cursor = connection.cursor(dictionary=True)
         cursor.execute("""
             SELECT
-                Unit_ID,
-                Blood_Type,
-                Quantity,
-                Collection_Date,
-                Expiration_Date,
-                Testing_Status,
-                Donor_ID,
-                Bank_ID
-            FROM BLOOD_UNIT
-            ORDER BY Unit_ID DESC
+                BU.Unit_ID,
+                BU.Blood_Type,
+                BU.Quantity,
+                BU.Collection_Date,
+                BU.Expiration_Date,
+                BU.Testing_Status,
+                BU.Donor_ID,
+                BU.Bank_ID,
+                BB.Name AS Bank_Name
+            FROM BLOOD_UNIT BU
+            LEFT JOIN BLOOD_BANK BB ON BU.Bank_ID = BB.Bank_ID
+            ORDER BY BU.Unit_ID DESC
         """)
         units = cursor.fetchall()
         return jsonify(serialize_item(units))
@@ -161,6 +296,7 @@ def get_blood_units():
 
 @app.route("/api/newunit", methods=["POST"])
 @app.route("/api/blood-units", methods=["POST"])
+@admin_required
 def add_blood_unit():
     data = request.get_json()
     if not data:
@@ -177,29 +313,39 @@ def add_blood_unit():
         return jsonify({"error": "Quantity must be a valid number"}), 400
 
     if quantity <= 0:
-        return jsonify({"error": "Quantity must be positive"}), 400
+        return jsonify({"error": "Quantity must be a positive integer"}), 400
 
-    collection_date = data.get("Collection_Date")
-    if not collection_date:
-        collection_date = datetime.date.today().strftime("%Y-%m-%d")
+    collection_date_str = data.get("Collection_Date")
+    if not collection_date_str:
+        collection_date_str = datetime.date.today().strftime("%Y-%m-%d")
 
-    expiration_date = data.get("Expiration_Date")
-    if not expiration_date:
-        col_dt = datetime.datetime.strptime(collection_date, "%Y-%m-%d")
-        expiration_date = (col_dt + datetime.timedelta(days=42)).strftime("%Y-%m-%d")
+    expiration_date_str = data.get("Expiration_Date")
+    if not expiration_date_str:
+        col_dt = datetime.datetime.strptime(collection_date_str, "%Y-%m-%d").date()
+        expiration_date_str = (col_dt + datetime.timedelta(days=42)).strftime("%Y-%m-%d")
 
-    testing_status = data.get("Testing_Status", "Passed")
+    try:
+        col_date = datetime.datetime.strptime(collection_date_str, "%Y-%m-%d").date()
+        exp_date = datetime.datetime.strptime(expiration_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return jsonify({"error": "Dates must be in valid YYYY-MM-DD format"}), 400
+
+    if exp_date < col_date:
+        return jsonify({"error": "Expiration date cannot be earlier than collection date"}), 400
+
+    testing_status = data.get("Testing_Status", "Pending").capitalize()
+    if testing_status not in {"Pending", "Passed", "Failed"}:
+        testing_status = "Pending"
+
     bank_id = data.get("Bank_ID")
     donor_id = data.get("Donor_ID")
 
     connection = None
     cursor = None
-
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
-        # Validate or fallback Bank_ID
         if not bank_id:
             cursor.execute("SELECT Bank_ID FROM BLOOD_BANK LIMIT 1")
             first_bank = cursor.fetchone()
@@ -207,7 +353,6 @@ def add_blood_unit():
         else:
             bank_id = int(bank_id)
 
-        # Validate or fallback Donor_ID (foreign key constraint)
         if not donor_id:
             cursor.execute("SELECT Donor_ID FROM DONOR LIMIT 1")
             first_donor = cursor.fetchone()
@@ -221,27 +366,191 @@ def add_blood_unit():
                 (Blood_Type, Quantity, Collection_Date, Expiration_Date, Testing_Status, Donor_ID, Bank_ID)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (blood_type, quantity, collection_date, expiration_date, testing_status, donor_id, bank_id),
+            (blood_type, quantity, collection_date_str, expiration_date_str, testing_status, donor_id, bank_id),
         )
-
         unit_id = cursor.lastrowid
         connection.commit()
 
-        return (
-            jsonify({
-                "message": "Blood unit added successfully",
-                "Unit_ID": unit_id,
-                "Blood_Type": blood_type,
-                "Quantity": quantity,
-                "Testing_Status": testing_status,
-            }),
-            201,
-        )
+        return jsonify({
+            "message": "Blood unit added successfully",
+            "Unit_ID": unit_id,
+            "Blood_Type": blood_type,
+            "Quantity": quantity,
+            "Collection_Date": collection_date_str,
+            "Expiration_Date": expiration_date_str,
+            "Testing_Status": testing_status,
+        }), 201
+
     except Exception as e:
         if connection:
             connection.rollback()
         app.logger.exception("Failed to add blood unit")
         return jsonify({"error": f"Failed to add blood unit: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+
+@app.route("/api/blood-units/<int:unit_id>", methods=["PUT"])
+@admin_required
+def update_blood_unit(unit_id):
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body must contain JSON"}), 400
+
+    blood_type = data.get("Blood_Type", "").strip().upper()
+    valid_blood_types = {"A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"}
+    if blood_type not in valid_blood_types:
+        return jsonify({"error": "Invalid blood type"}), 400
+
+    try:
+        quantity = int(data.get("Quantity", 0))
+    except (ValueError, TypeError):
+        return jsonify({"error": "Quantity must be a valid number"}), 400
+
+    if quantity <= 0:
+        return jsonify({"error": "Quantity must be a positive integer"}), 400
+
+    collection_date_str = data.get("Collection_Date")
+    expiration_date_str = data.get("Expiration_Date")
+
+    if not collection_date_str or not expiration_date_str:
+        return jsonify({"error": "Collection date and expiration date are required"}), 400
+
+    try:
+        col_date = datetime.datetime.strptime(collection_date_str, "%Y-%m-%d").date()
+        exp_date = datetime.datetime.strptime(expiration_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return jsonify({"error": "Dates must be in valid YYYY-MM-DD format"}), 400
+
+    if exp_date < col_date:
+        return jsonify({"error": "Expiration date cannot be earlier than collection date"}), 400
+
+    testing_status = data.get("Testing_Status", "Pending").capitalize()
+    if testing_status not in {"Pending", "Passed", "Failed"}:
+        return jsonify({"error": "Testing status must be Pending, Passed, or Failed"}), 400
+
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("SELECT Unit_ID FROM BLOOD_UNIT WHERE Unit_ID = %s", (unit_id,))
+        existing = cursor.fetchone()
+        if not existing:
+            return jsonify({"error": f"Blood unit #{unit_id} not found"}), 404
+
+        cursor.execute(
+            """
+            UPDATE BLOOD_UNIT
+            SET Blood_Type = %s,
+                Quantity = %s,
+                Collection_Date = %s,
+                Expiration_Date = %s,
+                Testing_Status = %s
+            WHERE Unit_ID = %s
+            """,
+            (blood_type, quantity, collection_date_str, expiration_date_str, testing_status, unit_id),
+        )
+        connection.commit()
+
+        return jsonify({
+            "message": f"Blood unit #{unit_id} updated successfully",
+            "Unit_ID": unit_id,
+            "Blood_Type": blood_type,
+            "Quantity": quantity,
+            "Collection_Date": collection_date_str,
+            "Expiration_Date": expiration_date_str,
+            "Testing_Status": testing_status,
+        }), 200
+
+    except Exception as e:
+        if connection:
+            connection.rollback()
+        app.logger.exception("Failed to update blood unit")
+        return jsonify({"error": f"Failed to update blood unit: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+
+@app.route("/api/blood-units/<int:unit_id>/status", methods=["PATCH"])
+@admin_required
+def update_blood_unit_testing_status(unit_id):
+    data = request.get_json()
+    if not data or not data.get("Testing_Status"):
+        return jsonify({"error": "Testing_Status is required"}), 400
+
+    testing_status = data.get("Testing_Status", "").capitalize()
+    if testing_status not in {"Pending", "Passed", "Failed"}:
+        return jsonify({"error": "Testing status must be Pending, Passed, or Failed"}), 400
+
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("SELECT Unit_ID FROM BLOOD_UNIT WHERE Unit_ID = %s", (unit_id,))
+        if not cursor.fetchone():
+            return jsonify({"error": f"Blood unit #{unit_id} not found"}), 404
+
+        cursor.execute(
+            "UPDATE BLOOD_UNIT SET Testing_Status = %s WHERE Unit_ID = %s",
+            (testing_status, unit_id),
+        )
+        connection.commit()
+
+        return jsonify({
+            "message": f"Testing status for unit #{unit_id} updated to {testing_status}",
+            "Unit_ID": unit_id,
+            "Testing_Status": testing_status,
+        }), 200
+
+    except Exception as e:
+        if connection:
+            connection.rollback()
+        return jsonify({"error": f"Failed to update testing status: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+
+@app.route("/api/blood-units/<int:unit_id>", methods=["DELETE"])
+@admin_required
+def delete_blood_unit(unit_id):
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("SELECT Unit_ID FROM BLOOD_UNIT WHERE Unit_ID = %s", (unit_id,))
+        existing = cursor.fetchone()
+        if not existing:
+            return jsonify({"error": f"Blood unit #{unit_id} not found"}), 404
+
+        # Cleanly delete referencing rows from relational bridge tables first
+        cursor.execute("DELETE FROM requires WHERE Unit_ID = %s", (unit_id,))
+        cursor.execute("DELETE FROM is_stored_in WHERE Unit_ID = %s", (unit_id,))
+        cursor.execute("DELETE FROM gives WHERE Unit_ID = %s", (unit_id,))
+        cursor.execute("DELETE FROM BLOOD_UNIT WHERE Unit_ID = %s", (unit_id,))
+
+        connection.commit()
+        return jsonify({"message": f"Blood unit #{unit_id} deleted successfully."}), 200
+
+    except Exception as e:
+        if connection:
+            connection.rollback()
+        app.logger.exception("Failed to delete blood unit")
+        return jsonify({"error": f"Failed to delete blood unit: {str(e)}"}), 500
     finally:
         if cursor:
             cursor.close()
@@ -260,7 +569,18 @@ def get_hospitals():
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM HOSPITAL ORDER BY Hospital_ID ASC")
+        cursor.execute("""
+            SELECT
+                H.Hospital_ID,
+                H.Name,
+                H.Address,
+                H.Contact_No,
+                COUNT(HR.Request_ID) AS Request_Count
+            FROM HOSPITAL H
+            LEFT JOIN HOSPITAL_REQUEST HR ON H.Hospital_ID = HR.Hospital_ID
+            GROUP BY H.Hospital_ID, H.Name, H.Address, H.Contact_No
+            ORDER BY H.Hospital_ID ASC
+        """)
         hospitals = cursor.fetchall()
         return jsonify(serialize_item(hospitals))
     except Exception as e:
@@ -275,6 +595,7 @@ def get_hospitals():
 
 @app.route("/api/newhospital", methods=["POST"])
 @app.route("/api/hospitals", methods=["POST"])
+@admin_required
 def add_hospital():
     data = request.get_json()
     if not data or not data.get("Name"):
@@ -295,19 +616,65 @@ def add_hospital():
         )
         hospital_id = cursor.lastrowid
         connection.commit()
-        return (
-            jsonify({
-                "message": "Hospital added successfully",
-                "Hospital_ID": hospital_id,
-                "Name": name,
-            }),
-            201,
-        )
+        return jsonify({
+            "message": "Hospital added successfully",
+            "Hospital_ID": hospital_id,
+            "Name": name,
+        }), 201
     except Exception as e:
         if connection:
             connection.rollback()
         app.logger.exception("Failed to add hospital")
         return jsonify({"error": f"Failed to add hospital: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+
+@app.route("/api/hospitals/<int:hospital_id>", methods=["DELETE"])
+@admin_required
+def delete_hospital(hospital_id):
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("SELECT Hospital_ID, Name FROM HOSPITAL WHERE Hospital_ID = %s", (hospital_id,))
+        hospital = cursor.fetchone()
+        if not hospital:
+            return jsonify({"error": f"Hospital #{hospital_id} not found"}), 404
+
+        hospital_name = hospital["Name"]
+
+        # Requirement 4: Follow existing foreign-key relationships and use a safe restriction
+        # rather than accidentally deleting request history
+        cursor.execute("SELECT COUNT(*) AS cnt FROM HOSPITAL_REQUEST WHERE Hospital_ID = %s", (hospital_id,))
+        req_count = cursor.fetchone()["cnt"]
+
+        cursor.execute("SELECT COUNT(*) AS cnt FROM issues WHERE Hospital_ID = %s", (hospital_id,))
+        issue_count = cursor.fetchone()["cnt"]
+
+        total_linked = req_count + issue_count
+        if total_linked > 0:
+            return jsonify({
+                "error": f"Cannot delete '{hospital_name}'. It is linked to {req_count} blood request(s) and {issue_count} issue record(s). Deletion is restricted to safeguard clinical audit history."
+            }), 400
+
+        cursor.execute("DELETE FROM HOSPITAL WHERE Hospital_ID = %s", (hospital_id,))
+        connection.commit()
+
+        return jsonify({
+            "message": f"Hospital '{hospital_name}' was deleted successfully."
+        }), 200
+
+    except Exception as e:
+        if connection:
+            connection.rollback()
+        app.logger.exception("Failed to delete hospital")
+        return jsonify({"error": f"Failed to delete hospital: {str(e)}"}), 500
     finally:
         if cursor:
             cursor.close()
@@ -343,6 +710,7 @@ def get_blood_banks():
 @app.route("/api/newbank", methods=["POST"])
 @app.route("/api/blood-banks", methods=["POST"])
 @app.route("/api/banks", methods=["POST"])
+@admin_required
 def add_blood_bank():
     data = request.get_json()
     if not data or not data.get("Name"):
@@ -370,14 +738,11 @@ def add_blood_bank():
         )
         bank_id = cursor.lastrowid
         connection.commit()
-        return (
-            jsonify({
-                "message": "Blood bank added successfully",
-                "Bank_ID": bank_id,
-                "Name": name,
-            }),
-            201,
-        )
+        return jsonify({
+            "message": "Blood bank added successfully",
+            "Bank_ID": bank_id,
+            "Name": name,
+        }), 201
     except Exception as e:
         if connection:
             connection.rollback()
@@ -430,9 +795,9 @@ def get_requests():
 
 @app.route("/api/newrequest", methods=["POST"])
 @app.route("/api/requests", methods=["POST"])
+@admin_required
 def create_blood_request():
     data = request.get_json()
-
     if not data:
         return jsonify({"error": "Request body must contain JSON"}), 400
 
@@ -441,7 +806,6 @@ def create_blood_request():
         field for field in required_fields
         if data.get(field) is None or data.get(field) == ""
     ]
-
     if missing_fields:
         return jsonify({
             "error": "Missing required fields",
@@ -467,7 +831,6 @@ def create_blood_request():
 
     connection = None
     cursor = None
-
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
@@ -489,7 +852,6 @@ def create_blood_request():
             """,
             (blood_type, quantity, "Pending", urgency, hospital_id),
         )
-
         request_id = cursor.lastrowid
         connection.commit()
 
@@ -506,7 +868,179 @@ def create_blood_request():
             connection.rollback()
         app.logger.exception("Failed to create blood request")
         return jsonify({"error": f"Failed to submit blood request: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
 
+
+@app.route("/api/requests/<int:request_id>/status", methods=["PUT", "PATCH"])
+@admin_required
+def update_request_status(request_id):
+    """
+    Update request status to Pending, Approved, or Rejected.
+    Requirement 2: Approval must update blood inventory within a single MySQL transaction.
+    - Check request exists and is not already approved.
+    - Match exact blood type with tested ('Passed'), non-expired (Expiration_Date >= CURDATE()) units.
+    - If stock is insufficient, reject approval and rollback.
+    - If stock is available, deduct requested units from eligible inventory records using FIFO.
+    - Save changes atomically. Prevent duplicate deductions.
+    """
+    data = request.get_json()
+    if not data or not data.get("status"):
+        return jsonify({"error": "Status is required (Pending, Approved, or Rejected)."}), 400
+
+    new_status = data["status"].strip().capitalize()
+    if new_status not in {"Pending", "Approved", "Rejected"}:
+        return jsonify({"error": "Status must be 'Pending', 'Approved', or 'Rejected'."}), 400
+
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        # Explicitly begin transaction
+        connection.start_transaction()
+        cursor = connection.cursor(dictionary=True)
+
+        # 1. Lock and fetch the request record
+        cursor.execute(
+            """
+            SELECT
+                Request_ID,
+                Request_Date,
+                Needed_Blood_Type,
+                Qty_Requested,
+                Status,
+                Hospital_ID
+            FROM HOSPITAL_REQUEST
+            WHERE Request_ID = %s
+            FOR UPDATE
+            """,
+            (request_id,),
+        )
+        req = cursor.fetchone()
+        if not req:
+            connection.rollback()
+            return jsonify({"error": f"Blood request #{request_id} not found."}), 404
+
+        current_status = req["Status"]
+
+        # If already at target status, return cleanly without duplicating actions
+        if current_status == new_status:
+            connection.rollback()
+            return jsonify({
+                "message": f"Request #{request_id} is already {new_status}.",
+                "Request_ID": request_id,
+                "Status": new_status,
+            }), 200
+
+        # Handle APPROVAL
+        if new_status == "Approved":
+            # Rule 1 & 8: Prevent duplicate deductions
+            if current_status == "Approved":
+                connection.rollback()
+                return jsonify({
+                    "error": f"Request #{request_id} is already approved. Cannot re-approve or deduct stock again."
+                }), 400
+
+            blood_type = req["Needed_Blood_Type"]
+            needed_units = int(req["Qty_Requested"])
+
+            # 2. Lock and fetch compatible, tested ('Passed'), unexpired, positive-stock inventory units
+            # Exact blood type matching is used and documented as required.
+            cursor.execute(
+                """
+                SELECT
+                    Unit_ID,
+                    Blood_Type,
+                    Quantity,
+                    Collection_Date,
+                    Expiration_Date,
+                    Testing_Status
+                FROM BLOOD_UNIT
+                WHERE Blood_Type = %s
+                  AND Testing_Status = 'Passed'
+                  AND Expiration_Date >= CURDATE()
+                  AND Quantity > 0
+                ORDER BY Expiration_Date ASC, Unit_ID ASC
+                FOR UPDATE
+                """,
+                (blood_type,),
+            )
+            eligible_units = cursor.fetchall()
+            total_available = sum(int(u["Quantity"]) for u in eligible_units)
+
+            # 3. Check for shortage
+            if total_available < needed_units:
+                connection.rollback()
+                return jsonify({
+                    "error": (
+                        f"Cannot approve request: Insufficient inventory for blood type {blood_type}. "
+                        f"Requested: {needed_units} unit(s). "
+                        f"Available tested & non-expired stock: {total_available} unit(s). "
+                        f"Shortage: {needed_units - total_available} unit(s)."
+                    )
+                }), 400
+
+            # 4. Deduct requested units using FIFO (First Expiring, First Out)
+            remaining_to_deduct = needed_units
+            deducted_log = []
+
+            for unit in eligible_units:
+                if remaining_to_deduct <= 0:
+                    break
+                unit_qty = int(unit["Quantity"])
+                deduct_from_this_unit = min(unit_qty, remaining_to_deduct)
+                new_qty = unit_qty - deduct_from_this_unit
+
+                cursor.execute(
+                    "UPDATE BLOOD_UNIT SET Quantity = %s WHERE Unit_ID = %s",
+                    (new_qty, unit["Unit_ID"]),
+                )
+                remaining_to_deduct -= deduct_from_this_unit
+                deducted_log.append(f"Unit #{unit['Unit_ID']} (-{deduct_from_this_unit})")
+
+            # 5. Update request status to Approved
+            cursor.execute(
+                "UPDATE HOSPITAL_REQUEST SET Status = 'Approved' WHERE Request_ID = %s",
+                (request_id,),
+            )
+
+            # 6. Commit transaction atomically
+            connection.commit()
+
+            return jsonify({
+                "message": (
+                    f"Request #{request_id} approved successfully! "
+                    f"Deducted {needed_units} unit(s) of {blood_type} from inventory ({', '.join(deducted_log)})."
+                ),
+                "Request_ID": request_id,
+                "Status": "Approved",
+                "Blood_Type": blood_type,
+                "Units_Deducted": needed_units,
+            }), 200
+
+        # Handle REJECTED or PENDING
+        else:
+            # Rule: If a request is rejected or reset to pending, do not restore stock
+            cursor.execute(
+                "UPDATE HOSPITAL_REQUEST SET Status = %s WHERE Request_ID = %s",
+                (new_status, request_id),
+            )
+            connection.commit()
+
+            return jsonify({
+                "message": f"Request #{request_id} status updated to {new_status}.",
+                "Request_ID": request_id,
+                "Status": new_status,
+            }), 200
+
+    except Exception as e:
+        if connection:
+            connection.rollback()
+        app.logger.exception(f"Failed to update status for request #{request_id}")
+        return jsonify({"error": f"Failed to update request status: {str(e)}"}), 500
     finally:
         if cursor:
             cursor.close()
@@ -521,10 +1055,7 @@ def create_blood_request():
 @app.route("/api/reports/blood-stock", methods=["GET"])
 @app.route("/api/reports/stock", methods=["GET"])
 def get_blood_stock_report():
-    """
-    Returns live verified blood stock:
-    Grouped by blood type, including only passed and unexpired units.
-    """
+    """Live verified blood stock grouped by blood type."""
     connection = None
     cursor = None
     try:
@@ -533,13 +1064,14 @@ def get_blood_stock_report():
         cursor.execute("""
             SELECT
                 Blood_Type,
-                CAST(SUM(Quantity) AS UNSIGNED) AS total_quantity,
+                CAST(COALESCE(SUM(Quantity), 0) AS UNSIGNED) AS total_quantity,
                 COUNT(*) AS unit_count,
                 MIN(Expiration_Date) AS earliest_expiry,
                 MAX(Expiration_Date) AS latest_expiry
             FROM BLOOD_UNIT
             WHERE Testing_Status = 'Passed'
               AND Expiration_Date >= CURDATE()
+              AND Quantity > 0
             GROUP BY Blood_Type
             ORDER BY Blood_Type ASC
         """)
