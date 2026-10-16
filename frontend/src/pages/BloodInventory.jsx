@@ -132,19 +132,39 @@ export default function BloodInventory({
                   <td>{fmt(u.Expiration_Date)}</td>
                   <td>
                     <div className="flex items-center gap-2">
-                      <Status value={u.Testing_Status} />
-                      <select
-                        className="status-dropdown text-xs py-1"
-                        value={u.Testing_Status || "Pending"}
-                        onChange={async (e) => {
-                          const res = await onTestingStatusChange(u.Unit_ID, e.target.value);
-                          showNotice(res.message);
-                        }}
-                      >
-                        <option value="Pending">Pending</option>
-                        <option value="Passed">Passed</option>
-                        <option value="Failed">Failed</option>
-                      </select>
+                      {/* <Status value={u.Testing_Status} /> */}
+                      {(() => {
+                        const status = u.Testing_Status || "Pending";
+                        const isPassed = status === "Passed";
+                        const isFailed = status === "Failed";
+                        const textColor = isPassed ? "#16A34A" : isFailed ? "#DC2626" : "#64748B";
+                        return (
+                          <select
+                            className={`status-dropdown status-dropdown-${status.toLowerCase()} text-xs py-1`}
+                            value={status}
+                            disabled={isPassed}
+                            title={isPassed ? "Testing status is locked (Passed units cannot be changed)." : undefined}
+                            style={{
+                              color: textColor,
+                              backgroundColor: "var(--bg-surface, #ffffff)",
+                            }}
+                            onChange={async (e) => {
+                              const res = await onTestingStatusChange(u.Unit_ID, e.target.value);
+                              showNotice(res.message);
+                            }}
+                          >
+                            <option value="Pending" style={{ color: "#64748B", backgroundColor: "#ffffff" }}>
+                              Pending
+                            </option>
+                            <option value="Passed" style={{ color: "#16A34A", backgroundColor: "#ffffff" }}>
+                              Passed
+                            </option>
+                            <option value="Failed" style={{ color: "#DC2626", backgroundColor: "#ffffff" }}>
+                              Failed
+                            </option>
+                          </select>
+                        );
+                      })()}
                     </div>
                   </td>
                   <td>
@@ -175,7 +195,7 @@ export default function BloodInventory({
           <div className="empty">
             <Search size={24} />
             <b>No blood inventory records found</b>
-            <span>Add a new blood unit to replenish the central inventory.</span>
+            {/* <span>Add a new blood unit to replenish the central inventory.</span> */}
           </div>
         )}
       </div>
@@ -258,16 +278,33 @@ export default function BloodInventory({
             </div>
 
             <label>
-              Testing status
+              Testing status {editingUnit.Testing_Status === "Passed" && <span className="text-xs text-muted">(Locked)</span>}
               <select
+                disabled={editingUnit.Testing_Status === "Passed"}
+                className={`status-dropdown status-dropdown-${(editingUnit.Testing_Status || "pending").toLowerCase()}`}
                 value={editingUnit.Testing_Status}
+                style={{
+                  color:
+                    editingUnit.Testing_Status === "Passed"
+                      ? "#16A34A"
+                      : editingUnit.Testing_Status === "Failed"
+                      ? "#DC2626"
+                      : "#64748B",
+                  backgroundColor: "var(--bg-surface, #ffffff)",
+                }}
                 onChange={(e) =>
                   setEditingUnit((prev) => ({ ...prev, Testing_Status: e.target.value }))
                 }
               >
-                <option value="Pending">Pending</option>
-                <option value="Passed">Passed</option>
-                <option value="Failed">Failed</option>
+                <option value="Pending" style={{ color: "#64748B", backgroundColor: "#ffffff" }}>
+                  Pending
+                </option>
+                <option value="Passed" style={{ color: "#16A34A", backgroundColor: "#ffffff" }}>
+                  Passed
+                </option>
+                <option value="Failed" style={{ color: "#DC2626", backgroundColor: "#ffffff" }}>
+                  Failed
+                </option>
               </select>
             </label>
 

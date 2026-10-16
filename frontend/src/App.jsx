@@ -49,6 +49,8 @@ function App() {
     totalUnits,
     pending,
     saveRecord,
+    recordDonorDonation,
+    getDonorHistory,
     changeRequestStatus,
     saveUnit,
     changeTestingStatus,
@@ -85,14 +87,14 @@ function App() {
   async function handleSave(e) {
     e.preventDefault();
 
-    // Frontend validation for blood units
-    if (modal === "Blood unit") {
+    // Frontend validation for blood units and donations
+    if (modal === "Blood unit" || modal === "Donation") {
       const qty = parseInt(form.Quantity, 10);
       if (isNaN(qty) || qty <= 0) {
-        showNotice("Quantity must be a positive integer.");
+        showNotice("Quantity must be a positive integer (> 0).");
         return;
       }
-      if (form.Collection_Date && form.Expiration_Date && form.Expiration_Date < form.Collection_Date) {
+      if (modal === "Blood unit" && form.Collection_Date && form.Expiration_Date && form.Expiration_Date < form.Collection_Date) {
         showNotice("Expiration date cannot be earlier than collection date.");
         return;
       }
@@ -139,7 +141,17 @@ function App() {
           />
         );
       case "Donors":
-        return <Donors donors={donors} search={search} onAdd={openCreate} />;
+        return (
+          <Donors
+            donors={donors}
+            banks={banks}
+            search={search}
+            onAdd={openCreate}
+            onRecordDonation={recordDonorDonation}
+            getDonorHistory={getDonorHistory}
+            showNotice={showNotice}
+          />
+        );
       case "Blood inventory":
         return (
           <BloodInventory

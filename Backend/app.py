@@ -307,8 +307,11 @@ def add_blood_unit():
     if blood_type not in valid_blood_types:
         return jsonify({"error": "Invalid blood type"}), 400
 
+    raw_qty = data.get("Quantity") if data.get("Quantity") is not None else data.get("quantity")
+    if raw_qty is None or raw_qty == "":
+        raw_qty = 450
     try:
-        quantity = int(data.get("Quantity", 450))
+        quantity = int(raw_qty)
     except (ValueError, TypeError):
         return jsonify({"error": "Quantity must be a valid number"}), 400
 
@@ -344,6 +347,7 @@ def add_blood_unit():
     cursor = None
     try:
         connection = get_db_connection()
+        connection.start_transaction()
         cursor = connection.cursor(dictionary=True)
 
         if not bank_id:
@@ -353,12 +357,20 @@ def add_blood_unit():
         else:
             bank_id = int(bank_id)
 
-        if not donor_id:
+        if donor_id:
+            donor_id = int(donor_id)
+            cursor.execute("SELECT Donor_ID, Name, Blood_Type, Eligibility_Status FROM DONOR WHERE Donor_ID = %s FOR UPDATE", (donor_id,))
+            donor = cursor.fetchone()
+            if not donor:
+                connection.rollback()
+                return jsonify({"error": f"Donor #{donor_id} not found"}), 404
+            if donor.get("Eligibility_Status") in {"Ineligible", "Not Eligible"}:
+                connection.rollback()
+                return jsonify({"error": f"Cannot add blood unit: Donor '{donor['Name']}' is currently marked as {donor['Eligibility_Status']}."}), 400
+        else:
             cursor.execute("SELECT Donor_ID FROM DONOR LIMIT 1")
             first_donor = cursor.fetchone()
             donor_id = first_donor["Donor_ID"] if first_donor else 1
-        else:
-            donor_id = int(donor_id)
 
         cursor.execute(
             """
@@ -369,6 +381,35 @@ def add_blood_unit():
             (blood_type, quantity, collection_date_str, expiration_date_str, testing_status, donor_id, bank_id),
         )
         unit_id = cursor.lastrowid
+
+        # Insert relational bridge records
+        cursor.execute(
+            """
+            INSERT INTO gives (Donor_ID, Unit_ID, Donation_Type, Collection_Date, Quantity)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (donor_id, unit_id, "Whole Blood", collection_date_str, quantity),
+        )
+
+        cursor.execute(
+            """
+            INSERT INTO is_stored_in (Unit_ID, Bank_ID, Aisle_No)
+            VALUES (%s, %s, %s)
+            """,
+            (unit_id, bank_id, "Quarantine" if testing_status == "Pending" else "Standard"),
+        )
+
+        # Update donor totals
+        cursor.execute(
+            """
+            UPDATE DONOR
+            SET Total_Donations = Total_Donations + 1,
+                Total_Quantity_Donated = Total_Quantity_Donated + %s
+            WHERE Donor_ID = %s
+            """,
+            (quantity, donor_id),
+        )
+
         connection.commit()
 
         return jsonify({
@@ -436,12 +477,29 @@ def update_blood_unit(unit_id):
     cursor = None
     try:
         connection = get_db_connection()
+        connection.start_transaction()
         cursor = connection.cursor(dictionary=True)
 
-        cursor.execute("SELECT Unit_ID FROM BLOOD_UNIT WHERE Unit_ID = %s", (unit_id,))
+        cursor.execute("SELECT Unit_ID, Testing_Status FROM BLOOD_UNIT WHERE Unit_ID = %s FOR UPDATE", (unit_id,))
         existing = cursor.fetchone()
         if not existing:
+            connection.rollback()
             return jsonify({"error": f"Blood unit #{unit_id} not found"}), 404
+
+        current_status = existing.get("Testing_Status") or "Pending"
+        # Requirement 1: If Passed, locked from status modification
+        if current_status == "Passed" and testing_status != "Passed":
+            connection.rollback()
+            return jsonify({
+                "error": f"Testing status is locked: Blood unit #{unit_id} is already marked as 'Passed' and cannot be changed."
+            }), 400
+
+        # If Failed, cannot be re-activated to Passed or Pending
+        if current_status == "Failed" and testing_status != "Failed":
+            connection.rollback()
+            return jsonify({
+                "error": f"Testing status is locked: Blood unit #{unit_id} is marked as 'Failed' and cannot be modified."
+            }), 400
 
         cursor.execute(
             """
@@ -494,11 +552,35 @@ def update_blood_unit_testing_status(unit_id):
     cursor = None
     try:
         connection = get_db_connection()
+        connection.start_transaction()
         cursor = connection.cursor(dictionary=True)
 
-        cursor.execute("SELECT Unit_ID FROM BLOOD_UNIT WHERE Unit_ID = %s", (unit_id,))
-        if not cursor.fetchone():
+        cursor.execute("SELECT Unit_ID, Testing_Status FROM BLOOD_UNIT WHERE Unit_ID = %s FOR UPDATE", (unit_id,))
+        unit = cursor.fetchone()
+        if not unit:
+            connection.rollback()
             return jsonify({"error": f"Blood unit #{unit_id} not found"}), 404
+
+        current_status = unit.get("Testing_Status") or "Pending"
+
+        # Requirement 1: If Testing_Status is Passed, status is locked and cannot be changed
+        if current_status == "Passed":
+            connection.rollback()
+            return jsonify({
+                "error": f"Testing status is locked: Blood unit #{unit_id} is already marked as 'Passed' and cannot be changed."
+            }), 400
+
+        # If current is Failed, cannot be re-activated
+        if current_status == "Failed":
+            connection.rollback()
+            return jsonify({
+                "error": f"Testing status is locked: Blood unit #{unit_id} is marked as 'Failed' and cannot be changed."
+            }), 400
+
+        # If current is Pending, allow change to Passed or Failed
+        if current_status == "Pending" and testing_status not in {"Passed", "Failed", "Pending"}:
+            connection.rollback()
+            return jsonify({"error": "Testing status must be 'Passed' or 'Failed'"}), 400
 
         cursor.execute(
             "UPDATE BLOOD_UNIT SET Testing_Status = %s WHERE Unit_ID = %s",
@@ -530,12 +612,29 @@ def delete_blood_unit(unit_id):
     cursor = None
     try:
         connection = get_db_connection()
+        connection.start_transaction()
         cursor = connection.cursor(dictionary=True)
 
-        cursor.execute("SELECT Unit_ID FROM BLOOD_UNIT WHERE Unit_ID = %s", (unit_id,))
+        cursor.execute("SELECT Unit_ID FROM BLOOD_UNIT WHERE Unit_ID = %s FOR UPDATE", (unit_id,))
         existing = cursor.fetchone()
         if not existing:
+            connection.rollback()
             return jsonify({"error": f"Blood unit #{unit_id} not found"}), 404
+
+        # Check linked donor in gives to maintain accurate donor totals
+        cursor.execute("SELECT Donor_ID, Quantity FROM gives WHERE Unit_ID = %s", (unit_id,))
+        linked = cursor.fetchone()
+        if linked:
+            deduct_qty = int(linked.get("Quantity") or 450)
+            cursor.execute(
+                """
+                UPDATE DONOR
+                SET Total_Donations = GREATEST(0, Total_Donations - 1),
+                    Total_Quantity_Donated = GREATEST(0, Total_Quantity_Donated - %s)
+                WHERE Donor_ID = %s
+                """,
+                (deduct_qty, linked["Donor_ID"]),
+            )
 
         # Cleanly delete referencing rows from relational bridge tables first
         cursor.execute("DELETE FROM requires WHERE Unit_ID = %s", (unit_id,))
@@ -551,6 +650,264 @@ def delete_blood_unit(unit_id):
             connection.rollback()
         app.logger.exception("Failed to delete blood unit")
         return jsonify({"error": f"Failed to delete blood unit: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+
+# -----------------------------------------
+# DONATIONS & DONOR HISTORY
+# -----------------------------------------
+
+@app.route("/api/donations", methods=["GET"])
+def get_donations():
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT
+                g.Donor_ID,
+                g.Unit_ID,
+                g.Donation_Type,
+                g.Collection_Date,
+                COALESCE(g.Quantity, bu.Quantity, 450) AS Quantity,
+                d.Name AS Donor_Name,
+                d.Blood_Type,
+                d.Eligibility_Status,
+                bu.Testing_Status,
+                bu.Expiration_Date,
+                bu.Bank_ID,
+                bb.Name AS Bank_Name
+            FROM gives g
+            JOIN DONOR d ON g.Donor_ID = d.Donor_ID
+            JOIN BLOOD_UNIT bu ON g.Unit_ID = bu.Unit_ID
+            LEFT JOIN BLOOD_BANK bb ON bu.Bank_ID = bb.Bank_ID
+            ORDER BY g.Collection_Date DESC, g.Unit_ID DESC
+        """)
+        donations = cursor.fetchall()
+        return jsonify(serialize_item(donations))
+    except Exception as e:
+        app.logger.exception("Failed to fetch donations")
+        return jsonify({"error": f"Failed to fetch donations: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+
+@app.route("/api/donors/<int:donor_id>/history", methods=["GET"])
+@app.route("/api/donors/<int:donor_id>/donations", methods=["GET"])
+def get_donor_history(donor_id):
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("SELECT Donor_ID, Name, Blood_Type, Eligibility_Status, Total_Donations, Total_Quantity_Donated FROM DONOR WHERE Donor_ID = %s", (donor_id,))
+        donor = cursor.fetchone()
+        if not donor:
+            return jsonify({"error": f"Donor #{donor_id} not found"}), 404
+
+        cursor.execute("""
+            SELECT
+                g.Donor_ID,
+                g.Unit_ID,
+                g.Donation_Type,
+                g.Collection_Date,
+                COALESCE(g.Quantity, bu.Quantity, 450) AS Quantity,
+                bu.Blood_Type,
+                bu.Testing_Status,
+                bu.Expiration_Date,
+                bu.Bank_ID,
+                bb.Name AS Bank_Name
+            FROM gives g
+            JOIN BLOOD_UNIT bu ON g.Unit_ID = bu.Unit_ID
+            LEFT JOIN BLOOD_BANK bb ON bu.Bank_ID = bb.Bank_ID
+            WHERE g.Donor_ID = %s
+            ORDER BY g.Collection_Date DESC, g.Unit_ID DESC
+        """, (donor_id,))
+        history = cursor.fetchall()
+
+        return jsonify({
+            "donor": serialize_item(donor),
+            "history": serialize_item(history)
+        }), 200
+    except Exception as e:
+        app.logger.exception(f"Failed to fetch history for donor #{donor_id}")
+        return jsonify({"error": f"Failed to fetch donor history: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+
+@app.route("/api/donations", methods=["POST"])
+@app.route("/api/donors/<int:url_donor_id>/donations", methods=["POST"])
+@admin_required
+def record_donation(url_donor_id=None):
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body must contain JSON"}), 400
+
+    donor_id = url_donor_id or data.get("Donor_ID") or data.get("donor_id")
+    if not donor_id:
+        return jsonify({"error": "Donor_ID is required"}), 400
+
+    try:
+        donor_id = int(donor_id)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Donor_ID must be a valid integer"}), 400
+
+    raw_qty = data.get("Quantity") if data.get("Quantity") is not None else data.get("quantity")
+    if raw_qty is None or raw_qty == "":
+        raw_qty = 450
+    try:
+        quantity = int(raw_qty)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Quantity must be a valid integer"}), 400
+
+    if quantity <= 0:
+        return jsonify({"error": "Donation quantity must be greater than 0"}), 400
+
+    donation_type = data.get("Donation_Type") or data.get("donation_type") or "Whole Blood"
+    valid_types = {"Whole Blood", "Plasma", "Platelets"}
+    if donation_type not in valid_types:
+        return jsonify({"error": f"Invalid donation type. Must be one of: {', '.join(sorted(valid_types))}"}), 400
+
+    collection_date_str = data.get("Collection_Date") or data.get("Donation_Date") or data.get("collection_date")
+    if not collection_date_str:
+        collection_date_str = datetime.date.today().strftime("%Y-%m-%d")
+
+    try:
+        col_date = datetime.datetime.strptime(collection_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return jsonify({"error": "Collection date must be in YYYY-MM-DD format"}), 400
+
+    exp_date = col_date + datetime.timedelta(days=42)
+    expiration_date_str = exp_date.strftime("%Y-%m-%d")
+
+    bank_id = data.get("Bank_ID") or data.get("bank_id")
+
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        connection.start_transaction()
+        cursor = connection.cursor(dictionary=True)
+
+        # 1. Lock and verify donor
+        cursor.execute(
+            "SELECT Donor_ID, Name, Blood_Type, Eligibility_Status FROM DONOR WHERE Donor_ID = %s FOR UPDATE",
+            (donor_id,)
+        )
+        donor = cursor.fetchone()
+        if not donor:
+            connection.rollback()
+            return jsonify({"error": f"Donor #{donor_id} not found"}), 404
+
+        # 2. Check donor eligibility
+        eligibility = donor.get("Eligibility_Status") or "Eligible"
+        if eligibility in {"Ineligible", "Not Eligible"}:
+            connection.rollback()
+            return jsonify({
+                "error": f"Cannot record donation: Donor '{donor['Name']}' is currently marked as {eligibility}."
+            }), 400
+
+        # 3. Check bank_id
+        if not bank_id:
+            cursor.execute("SELECT Bank_ID FROM BLOOD_BANK LIMIT 1")
+            first_bank = cursor.fetchone()
+            bank_id = first_bank["Bank_ID"] if first_bank else 1
+        else:
+            bank_id = int(bank_id)
+            cursor.execute("SELECT Bank_ID FROM BLOOD_BANK WHERE Bank_ID = %s", (bank_id,))
+            if not cursor.fetchone():
+                connection.rollback()
+                return jsonify({"error": f"Blood bank #{bank_id} not found"}), 404
+
+        # 4. Prevent duplicate donation record on the same date for the same donor
+        cursor.execute(
+            "SELECT Unit_ID FROM gives WHERE Donor_ID = %s AND Collection_Date = %s FOR UPDATE",
+            (donor_id, collection_date_str)
+        )
+        existing_donation = cursor.fetchone()
+        if existing_donation:
+            connection.rollback()
+            return jsonify({
+                "error": f"A donation has already been recorded for {donor['Name']} on {collection_date_str}. Duplicate donation records are prevented."
+            }), 400
+
+        blood_type = donor["Blood_Type"]
+
+        # 5. Insert BLOOD_UNIT with 'Pending' testing status (unavailable for usable stock until tested)
+        cursor.execute(
+            """
+            INSERT INTO BLOOD_UNIT
+                (Blood_Type, Quantity, Collection_Date, Expiration_Date, Testing_Status, Donor_ID, Bank_ID)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (blood_type, quantity, collection_date_str, expiration_date_str, "Pending", donor_id, bank_id),
+        )
+        unit_id = cursor.lastrowid
+
+        # 6. Insert into gives (donation record)
+        cursor.execute(
+            """
+            INSERT INTO gives (Donor_ID, Unit_ID, Donation_Type, Collection_Date, Quantity)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (donor_id, unit_id, donation_type, collection_date_str, quantity),
+        )
+
+        # 7. Insert storage record
+        cursor.execute(
+            """
+            INSERT INTO is_stored_in (Unit_ID, Bank_ID, Aisle_No)
+            VALUES (%s, %s, %s)
+            """,
+            (unit_id, bank_id, "Quarantine"),
+        )
+
+        # 8. Update DONOR donation history totals atomically
+        cursor.execute(
+            """
+            UPDATE DONOR
+            SET Total_Donations = Total_Donations + 1,
+                Total_Quantity_Donated = Total_Quantity_Donated + %s
+            WHERE Donor_ID = %s
+            """,
+            (quantity, donor_id),
+        )
+
+        # Commit transaction atomically
+        connection.commit()
+
+        return jsonify({
+            "message": f"Donation of {quantity} ml successfully recorded for {donor['Name']}. Blood unit #{unit_id} created with 'Pending' testing status.",
+            "Unit_ID": unit_id,
+            "Donor_ID": donor_id,
+            "Donor_Name": donor["Name"],
+            "Blood_Type": blood_type,
+            "Quantity": quantity,
+            "Collection_Date": collection_date_str,
+            "Expiration_Date": expiration_date_str,
+            "Testing_Status": "Pending",
+            "Donation_Type": donation_type,
+            "Bank_ID": bank_id,
+        }), 201
+
+    except Exception as e:
+        if connection:
+            connection.rollback()
+        app.logger.exception("Failed to record donation")
+        return jsonify({"error": f"Failed to record donation: {str(e)}"}), 500
     finally:
         if cursor:
             cursor.close()

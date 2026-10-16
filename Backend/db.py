@@ -77,6 +77,26 @@ def init_db():
             # If constraint was already altered or doesn't exist under that name
             pass
 
+        # 4. Safe migration: Ensure Total_Donations and Total_Quantity_Donated exist on DONOR
+        try:
+            cursor.execute("SHOW COLUMNS FROM donor")
+            donor_cols = {col["Field"] for col in cursor.fetchall()}
+            if "Total_Donations" not in donor_cols:
+                cursor.execute("ALTER TABLE donor ADD COLUMN Total_Donations INT NOT NULL DEFAULT 0")
+            if "Total_Quantity_Donated" not in donor_cols:
+                cursor.execute("ALTER TABLE donor ADD COLUMN Total_Quantity_Donated INT NOT NULL DEFAULT 0")
+        except Exception as e:
+            print(f"Donor columns migration notice: {e}")
+
+        # 5. Safe migration: Ensure Quantity exists on gives table
+        try:
+            cursor.execute("SHOW COLUMNS FROM gives")
+            gives_cols = {col["Field"] for col in cursor.fetchall()}
+            if "Quantity" not in gives_cols:
+                cursor.execute("ALTER TABLE gives ADD COLUMN Quantity INT NOT NULL DEFAULT 450")
+        except Exception as e:
+            print(f"Gives table migration notice: {e}")
+
         connection.commit()
     except Exception as e:
         if connection:

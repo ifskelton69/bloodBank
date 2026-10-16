@@ -1,4 +1,4 @@
-import { ChevronDown, CircleHelp, Droplet, HeartPulse, LogOut, X } from "lucide-react";
+import { ChevronDown, Droplet, HeartPulse, LogOut, X } from "lucide-react";
 import { nav } from "../../config/navConfig";
 import { useAuth } from "../../context/useAuth";
 
@@ -15,9 +15,8 @@ export default function Sidebar({ page, onNavigate, open, onClose, pending }) {
     .toUpperCase() || "AD";
 
   const handleLogout = async () => {
-    if (window.confirm("Are you sure you want to log out of your administrator session?")) {
-      await logout();
-    }
+     logout();
+    
   };
 
   return (

@@ -1,11 +1,12 @@
 export const donorsTable = {
   title: "Registered donors",
-  desc: "Manage donor profiles and eligibility.",
+  desc: "Manage donor profiles, donation histories, and eligibility.",
   action: "Add donor",
   type: "Donor",
   cols: [
     ["Donor_ID", "Donor ID"], ["Name", "Full name"], ["Blood_Type", "Blood type"],
-    ["Contact_No", "Contact"], ["Gender", "Gender"], ["Eligibility_Status", "Eligibility"],
+    ["Contact_No", "Contact"], ["Eligibility_Status", "Eligibility"],
+    ["Total_Donations", "Donations"], ["Total_Quantity_Donated", "Total donated"],
   ],
 };
 

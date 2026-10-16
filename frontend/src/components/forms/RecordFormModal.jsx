@@ -5,6 +5,7 @@ import { BLOOD_TYPES } from "../../data/initialData";
 
 const titles = {
   Donor: "Register a donor",
+  Donation: "Record blood donation",
   "Blood unit": "Add blood unit",
   Hospital: "Add hospital",
   "Blood bank": "Add blood bank",
@@ -63,6 +64,41 @@ export default function RecordFormModal({ type, form, setField, onSubmit, onClos
                 <option>Ineligible</option>
               </select>
             </label>
+          </>
+        )}
+
+        {type === "Donation" && (
+          <>
+            <div className="form-row">
+              {text("Donor_ID", "Donor ID", { type: "number", required: true, placeholder: "e.g. 1" })}
+              {text("Quantity", "Donation quantity (ml)", { type: "number", min: "1", required: true, placeholder: "450" })}
+            </div>
+            <div className="form-row">
+              {text("Collection_Date", "Donation date", { type: "date", required: true })}
+              <label>
+                Donation type
+                <select
+                  value={form.Donation_Type || "Whole Blood"}
+                  onChange={(e) => setField("Donation_Type", e.target.value)}
+                >
+                  <option value="Whole Blood">Whole Blood</option>
+                  <option value="Plasma">Plasma</option>
+                  <option value="Platelets">Platelets</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              Blood bank ID
+              <input
+                type="number"
+                min="1"
+                value={form.Bank_ID || 1}
+                onChange={(e) => setField("Bank_ID", e.target.value)}
+              />
+            </label>
+            <p className="text-xs text-muted" style={{ marginTop: "-4px", marginBottom: "8px" }}>
+              * Newly recorded donations are saved with "Pending" testing status and remain quarantined until verified.
+            </p>
           </>
         )}
 

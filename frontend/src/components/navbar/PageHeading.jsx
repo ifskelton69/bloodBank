@@ -2,7 +2,7 @@ import { Activity, Plus, RefreshCw } from "lucide-react";
 import Button from "../common/Button";
 import { pageTitles } from "../../config/navConfig";
 
-export default function PageHeading({ page, apiOnline, loading, onRefresh, onQuickAdd }) {
+export default function PageHeading({ page, loading, onRefresh, onQuickAdd }) {
   return (
     <div className="page-heading">
       <div>

@@ -106,7 +106,7 @@ export default function Hospitals({ hospitals, search, onAdd, onDeleteHospital, 
 
       <div className="table-foot">
         Showing {filtered.length} hospital{filtered.length === 1 ? "" : "s"}{" "}
-        <span>Live connected to MySQL database</span>
+        {/* <span>Live connected to MySQL database</span> */}
       </div>
 
       {/* Mandatory Hospital Deletion Confirmation Modal */}

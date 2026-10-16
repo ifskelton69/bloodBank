@@ -46,7 +46,7 @@ export default function DataTable({ config, rows, onAdd, head, footer = true }) 
       {footer && (
         <div className="table-foot">
           Showing {rows.length} record{rows.length === 1 ? "" : "s"}{" "}
-          <span>Synced with BloodBankDB when API is connected</span>
+          {/* <span>Synced with BloodBankDB when API is connected</span> */}
         </div>
       )}
     </div>

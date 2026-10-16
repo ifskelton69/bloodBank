@@ -96,6 +96,21 @@ export const updateRequestStatus = (requestId, status) => {
 };
 
 // -----------------------------------------
+// DONATIONS & DONOR HISTORY
+// -----------------------------------------
+export const getDonations = () => {
+  return axios.get("/donations");
+};
+
+export const recordDonation = (data) => {
+  return axios.post("/donations", data);
+};
+
+export const getDonorHistory = (donorId) => {
+  return axios.get(`/donors/${donorId}/history`);
+};
+
+// -----------------------------------------
 // REPORTS
 // -----------------------------------------
 export const getBloodStockReport = () => {
@@ -112,6 +127,9 @@ export default {
   logoutAdmin,
   getDonors,
   addDonor,
+  getDonations,
+  recordDonation,
+  getDonorHistory,
   getBloodUnits,
   addBloodUnit,
   addUnit,

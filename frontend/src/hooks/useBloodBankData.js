@@ -10,8 +10,11 @@ import {
   getBloodBanks,
   getBloodUnits,
   getDonors,
+  getDonorHistory,
+  getDonations,
   getHospitals,
   getRequests,
+  recordDonation,
   updateBloodUnit,
   updateRequestStatus,
   updateUnitTestingStatus,
@@ -19,6 +22,7 @@ import {
 
 const apiSavers = {
   Donor: addDonor,
+  Donation: recordDonation,
   "Blood unit": addBloodUnit,
   Hospital: addHospital,
   "Blood bank": addBloodBank,
@@ -38,13 +42,21 @@ function buildRecord(type, form) {
         Gender: form.Gender || "Other",
         Eligibility_Status: form.Eligibility_Status || "Eligible",
       };
+    case "Donation":
+      return {
+        Donor_ID: Number(form.Donor_ID),
+        Quantity: Number(form.Quantity || 450),
+        Collection_Date: form.Collection_Date || today,
+        Donation_Type: form.Donation_Type || "Whole Blood",
+        Bank_ID: Number(form.Bank_ID || 1),
+      };
     case "Blood unit":
       return {
         Blood_Type: form.Blood_Type?.trim()?.toUpperCase(),
         Quantity: Number(form.Quantity || 450),
         Collection_Date: form.Collection_Date || today,
         Expiration_Date: form.Expiration_Date || today,
-        Testing_Status: form.Testing_Status || "Passed",
+        Testing_Status: form.Testing_Status || "Pending",
         Bank_ID: Number(form.Bank_ID || 1),
       };
     case "Hospital":
@@ -157,10 +169,34 @@ export default function useBloodBankData() {
     };
   }, []);
 
-  const totalUnits = units.reduce((s, u) => s + Number(u.Quantity || 0), 0);
+  // Calculate usable inventory: only non-expired, Passed testing status with positive quantity
+  const totalUnits = units
+    .filter(
+      (u) =>
+        String(u.Testing_Status).toLowerCase() === "passed" &&
+        (!u.Expiration_Date || new Date(u.Expiration_Date) >= new Date().setHours(0, 0, 0, 0)) &&
+        Number(u.Quantity || 0) > 0
+    )
+    .reduce((s, u) => s + Number(u.Quantity || 0), 0);
   const pending = requests.filter(
     (r) => String(r.Status).toLowerCase() === "pending"
   ).length;
+
+  // Record a blood donation
+  const recordDonorDonation = async (donationData) => {
+    try {
+      const res = await recordDonation(donationData);
+      await loadAll();
+      return {
+        ok: true,
+        message: res.data?.message || "Donation recorded successfully.",
+        data: res.data,
+      };
+    } catch (err) {
+      const msg = err.response?.data?.error || "Failed to record donation.";
+      return { ok: false, message: msg };
+    }
+  };
 
   // Change request status (Pending, Approved, Rejected)
   const changeRequestStatus = async (requestId, status) => {
@@ -276,6 +312,9 @@ export default function useBloodBankData() {
     totalUnits,
     pending,
     saveRecord,
+    recordDonorDonation,
+    getDonorHistory,
+    getDonations,
     changeRequestStatus,
     saveUnit,
     changeTestingStatus,

@@ -45,7 +45,7 @@ export default function BloodRequests({ requests, search, onAdd, onStatusChange,
               <th>Blood type</th>
               <th>Units requested</th>
               <th>Urgency</th>
-              <th>Status</th>
+              {/* <th>Status</th> */}
               <th>Actions</th>
             </tr>
           </thead>
@@ -74,9 +74,9 @@ export default function BloodRequests({ requests, search, onAdd, onStatusChange,
                   <td>
                     <Status value={r.Urgency_Level} />
                   </td>
-                  <td>
+                  {/* <td>
                     <Status value={r.Status} />
-                  </td>
+                  </td> */}
                   <td>
                     <div className="table-actions">
                       <select
@@ -111,7 +111,7 @@ export default function BloodRequests({ requests, search, onAdd, onStatusChange,
 
       <div className="table-foot">
         Showing {filtered.length} request{filtered.length === 1 ? "" : "s"}{" "}
-        <span>Live connected to MySQL database</span>
+        {/* <span>Live connected to MySQL database</span> */}
       </div>
     </div>
   );

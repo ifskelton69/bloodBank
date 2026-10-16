@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, CalendarDays, ShieldCheck } from "lucide-react";
+import { Activity, CalendarDays, ShieldCheck } from "lucide-react";
 import Status from "../components/common/Status";
 
 export default function AdminSettings({ apiOnline }) {
